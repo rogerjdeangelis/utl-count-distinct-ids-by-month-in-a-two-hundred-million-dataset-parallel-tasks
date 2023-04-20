@@ -1,4 +1,4 @@
-    %let pgm=utl-count-distinct-ids-by-month-in-a-two-hundred-million-dataset-parallel-tasks;
+        %let pgm=utl-count-distinct-ids-by-month-in-a-two-hundred-million-dataset-parallel-tasks;
 
     Count distinct ids by month in a 192 million records parallel tasks;
 
@@ -432,6 +432,7 @@
     | | | | | | (_| | |  |   <  | | | | | | |_| | | |_| |_____| | | | (_| \__ \ | | |
     |_| |_| |_|\__,_|_|  |_|\_\ |_| |_| |_|\__,_|_|\__|_|     |_| |_|\__,_|___/_| |_|
     */
+
 
     /*---- partition ----*/
     data
