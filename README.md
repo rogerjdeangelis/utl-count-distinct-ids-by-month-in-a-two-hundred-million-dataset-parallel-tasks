@@ -1,20 +1,32 @@
-# utl-count-distinct-ids-by-month-in-a-two-hundred-million-dataset-parallel-tasks
-Count distinct ids by month in a 192 million records parallel tasks
     %let pgm=utl-count-distinct-ids-by-month-in-a-two-hundred-million-dataset-parallel-tasks;
 
     Count distinct ids by month in a 192 million records parallel tasks;
 
     1. SAS single HASH          6:43.85
     2  WPS single HASH          6:20.18
-    2. SAS multi-task           1:33.25  (even though CPU throttled??)
+    3. SAS multi-task           1:33.25  (even though CPU throttled??)
+
+    Marks very fast ordered hash
+
+    Mark Keintz
+    mkeintz@outlook.com
+
+    1. Mark SAS HASH          2:49.02
+    2. Mark WPS HASH          2:05.06 (no cpu or storage limitations?)
+    3. Mark SAS multi task    0:47.06 (ist oartition to 47sec last took 15 sec)
+                                      (should set up SPDE for parallel reads)
+                                      (parallel index might eliminate patitioning)
+
 
     I was able to process
-    192 million observations in a little in about 7 minutes, see below.
+    192 million observations in a little in about 7 minutes and
+    a little less than 3 using Marks ordered hash, see above.
     Between Microsoft and SAS cpu limits(2 of my 8 logical processors on my laptop),
-    my cpu utilization was apped at 25%. Will run on my beast computer when I get back to AZ.
+    my cpu utilization was capped at 25%. Will run on my beast computer when I get back to AZ.
 
     Partitioning seems to help and it is a good idea to keep the partions for
-    further procrssing.
+    further procrssing. I expect SPDE muti-task to be closer to 15 seconds.
+    Reads are not done in parallel except for SPDE? There were a lot of read conflicts.
 
     github
     https://tinyurl.com/2muaj8rx
@@ -106,7 +118,6 @@ Count distinct ids by month in a 192 million records parallel tasks
     / __|/ _` / __| | `_ \ / _` / __| `_ \
     \__ \ (_| \__ \ | | | | (_| \__ \ | | |
     |___/\__,_|___/ |_| |_|\__,_|___/_| |_|
-
     */
     data _null_;
        dcl hash h ();
@@ -185,19 +196,15 @@ Count distinct ids by month in a 192 million records parallel tasks
     */
 
     %utl_submit_wps64('
-
     libname sd1 "d:/sd1";
-
     data _null_;
        dcl hash h ();
        h.definekey ("date");
        h.definedata ("date", "Uniques");
        h.definedone ();
-
        dcl hash u ();
        u.definekey ("date","id");
        u.definedone ();
-
        do until (dne);
           set sd1.have end = dne;
           if h.find() ne 0 then call missing (Uniques);
@@ -207,11 +214,9 @@ Count distinct ids by month in a 192 million records parallel tasks
           end;
           h.replace();
        end;
-
        h.output (dataset: "sd1.want_wps_hash");
        stop;
     run;
-
     ');
 
     /*                               _ _   _       _            _
@@ -219,7 +224,6 @@ Count distinct ids by month in a 192 million records parallel tasks
     / __|/ _` / __| | `_ ` _ \| | | | | __| |_____| __/ _` / __| |/ /
     \__ \ (_| \__ \ | | | | | | |_| | | |_| |_____| || (_| \__ \   <
     |___/\__,_|___/ |_| |_| |_|\__,_|_|\__|_|      \__\__,_|___/_|\_\
-
     */
     %utlnopts; /*--- turn off macro messaging ----*/
     %array(_mth,values=JAN FEB MAR APR MAY JUN JUL AUG);
@@ -342,10 +346,216 @@ Count distinct ids by month in a 192 million records parallel tasks
     /*                                                                                                                        */
     /**************************************************************************************************************************/
 
+    /*_  __            _                      _               _
+    |  \/  | __ _ _ __| | __  ___  __ _ ___  | |__   __ _ ___| |__
+    | |\/| |/ _` | `__| |/ / / __|/ _` / __| | `_ \ / _` / __| `_ \
+    | |  | | (_| | |  |   <  \__ \ (_| \__ \ | | | | (_| \__ \ | | |
+    |_|  |_|\__,_|_|  |_|\_\ |___/\__,_|___/ |_| |_|\__,_|___/_| |_|
+
+    */
+
+    data want_mark (keep=lagdate uniques  rename=(lagdate=date));
+
+      if 0 then set sd1.have ;
+
+      declare hash hu (dataset:'sd1.have',ordered:'a');
+
+        hu.definekey('date','id');
+        hu.definedone();
+
+      declare hiter i ('hu');
+
+      do rc=i.first() by 0 until (i.next()^=0);
+
+        lagdate=lag(date);
+        if date^=lagdate then do;
+
+          if uniques>0 then output;
+          uniques=0;
+        end;
+        uniques+1;
+
+      end;
+      output;
+
+    run;
+
+    /*_  __            _                               _               _
+    |  \/  | __ _ _ __| | _____  __      ___ __  ___  | |__   __ _ ___| |__
+    | |\/| |/ _` | `__| |/ / __| \ \ /\ / / `_ \/ __| | `_ \ / _` / __| `_ \
+    | |  | | (_| | |  |   <\__ \  \ V  V /| |_) \__ \ | | | | (_| \__ \ | | |
+    |_|  |_|\__,_|_|  |_|\_\___/   \_/\_/ | .__/|___/ |_| |_|\__,_|___/_| |_|
+                                          |_|
+    */
+
+
+    %let _pth=%sysfunc(pathname(work));
+
+    %utl_submit_wps64("
+
+    libname sd1 'd:/sd1';
+    libname wrk '&_pth';
+
+    data wrk.want_wps_mark (keep=lagdate uniques  rename=(lagdate=date));
+
+      if 0 then set sd1.have ;
+
+      declare hash hu (dataset:'sd1.have',ordered:'a');
+
+        hu.definekey('date','id');
+        hu.definedone();
+
+      declare hiter i ('hu');
+
+      do rc=i.first() by 0 until (i.next()^=0);
+
+        lagdate=lag(date);
+        if date^=lagdate then do;
+
+          if uniques>0 then output;
+          uniques=0;
+        end;
+        uniques+1;
+
+      end;
+      output;
+
+    run;
+    proc print;
+    run;quit;
+
+    ");
+
+    /*                    _                      _ _   _       _               _
+     _ __ ___   __ _ _ __| | __  _ __ ___  _   _| | |_(_)     | |__   __ _ ___| |__
+    | `_ ` _ \ / _` | `__| |/ / | `_ ` _ \| | | | | __| |_____| `_ \ / _` / __| `_ \
+    | | | | | | (_| | |  |   <  | | | | | | |_| | | |_| |_____| | | | (_| \__ \ | | |
+    |_| |_| |_|\__,_|_|  |_|\_\ |_| |_| |_|\__,_|_|\__|_|     |_| |_|\__,_|___/_| |_|
+    */
+
+    /*---- partition ----*/
+    data
+      sd1.JAN
+      sd1.FEB
+      sd1.MAR
+      sd1.APR
+      sd1.MAY
+      sd1.JUN
+      sd1.JUL
+      sd1.AUG
+      ;
+
+    set sd1.have;
+      select(date);
+        when ( "JAN" ) output sd1.JAN ;
+        when ( "FEB" ) output sd1.FEB ;
+        when ( "MAR" ) output sd1.MAR ;
+        when ( "APR" ) output sd1.APR ;
+        when ( "MAY" ) output sd1.MAY ;
+        when ( "JUN" ) output sd1.JUN ;
+        when ( "JUL" ) output sd1.JUL ;
+        when ( "AUG" ) output sd1.AUG ;
+      end;
+    run;quit;
+
+    * SAVE the program in autocall library  c:/oto;
+    data _null_;file "c:\oto\_month.sas" lrecl=512;input;put _infile_;putlog _infile_;
+    cards4;
+    %macro _month(_month);
+    libname sd1 "d:/sd1";
+    data sd1.z&_month (keep=lagdate uniques  rename=(lagdate=date));
+
+      if 0 then set sd1.&_month ;
+
+      declare hash hu (dataset:"sd1.&_month",ordered:"a");
+
+        hu.definekey("date","id");
+        hu.definedone();
+
+      declare hiter i ("hu");
+
+      do rc=i.first() by 0 until (i.next()^=0);
+
+        lagdate=lag(date);
+        if date^=lagdate then do;
+
+          if uniques>0 then output;
+          uniques=0;
+        end;
+        uniques+1;
+
+      end;
+      output;
+
+    run;
+    %mend _month;
+    ;;;;
+    run;quit;
+
+    * test the macro interactively;
+    * note you can highlight and hit RMB(submit) to compile macro in your interactive session
+      then highlight and RMB the code below to test;
+
+    %_month(JAN);
+
+    %let _s=%sysfunc(compbl(C:\Progra~1\SASHome\SASFoundation\9.4\sas.exe -sysin
+    c:\nul -sasautos c:\oto -autoexec c:\oto\Tut_Oto.sas
+    -work d:\wrk)) -nosplash;
+
+    * The argument of getmode is the remainder after dividing by 8;
+
+    options noxwait noxsync;
+    %let tym=%sysfunc(time());
+    systask kill sys1 sys2 sys3 sys4  sys5 sys6 sys7 sys8;
+    systask command "&_s -termstmt %nrstr(%_month(JAN);) -log d:\log\a1.log" taskname=sys1;
+    systask command "&_s -termstmt %nrstr(%_month(FEB);) -log d:\log\a2.log" taskname=sys2;
+    systask command "&_s -termstmt %nrstr(%_month(MAR);) -log d:\log\a3.log" taskname=sys3;
+    systask command "&_s -termstmt %nrstr(%_month(APR);) -log d:\log\a4.log" taskname=sys4;
+    systask command "&_s -termstmt %nrstr(%_month(MAY);) -log d:\log\a4.log" taskname=sys5;
+    systask command "&_s -termstmt %nrstr(%_month(JUN);) -log d:\log\a6.log" taskname=sys6;
+    systask command "&_s -termstmt %nrstr(%_month(JUL);) -log d:\log\a7.log" taskname=sys7;
+    systask command "&_s -termstmt %nrstr(%_month(AUG);) -log d:\log\a8.log" taskname=sys8;
+    waitfor sys1 sys2 sys3 sys4  sys5 sys6 sys7 sys8;
+    %put %sysevalf( %sysfunc(time()) - &tym);
+
+    data humptyback;
+      set
+         sd1.zJAN
+         sd1.zFEB
+         sd1.zMAR
+         sd1.zAPR
+         sd1.zMAY
+         sd1.zJUN
+         sd1.zJUL
+         sd1.zAUG
+       ;
+    run;quit;
+
+    /**************************************************************************************************************************/
+    /*                                                                                                                        */
+    /*  NOTE: DATA statement used (Total process time):                                                                       */
+    /*        real time           0.04 seconds                                                                                */
+    /*        user cpu time       0.03 seconds                                                                                */
+    /*                                                                                                                        */
+    /*                                                                                                                        */
+    /*  Up to 40 obs from HUMPTYBACK total obs=8 19APR2023:07:46:08                                                           */
+    /*                                                                                                                        */
+    /*  Obs    DATE    UNIQUES                                                                                                */
+    /*                                                                                                                        */
+    /*   1     JAN       1002                                                                                                 */
+    /*   2     FEB       5002                                                                                                 */
+    /*   3     MAR      10000                                                                                                 */
+    /*   4     APR        702                                                                                                 */
+    /*   5     MAY      10000                                                                                                 */
+    /*   6     JUN       1002                                                                                                 */
+    /*   7     JUL       1002                                                                                                 */
+    /*   8     AUG        702                                                                                                 */
+    /*                                                                                                                        */
+    /**************************************************************************************************************************/
+
     /*              _
       ___ _ __   __| |
      / _ \ `_ \ / _` |
     |  __/ | | | (_| |
      \___|_| |_|\__,_|
-
     */
