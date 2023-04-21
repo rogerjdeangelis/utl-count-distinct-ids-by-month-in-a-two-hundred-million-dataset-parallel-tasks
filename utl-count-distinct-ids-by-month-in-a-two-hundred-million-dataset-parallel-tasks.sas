@@ -1,21 +1,58 @@
 %let pgm=utl-count-distinct-ids-by-month-in-a-two-hundred-million-dataset-parallel-tasks;
 
+Fastest Techniques (ordered input - grouped)
+
+Marks Single Pass Hash                     WPS   2:05.06
+Marks Multi-Task Hash(not coded in WPS)    SAS   0:47.06
+
+I added
+
+   SAS proc freq    (did not multi-task)
+   WPS proc freq
+   SAS proc summary (did not muti-task)
+   WPS Proc Summary
+
+   SAS SPDE Multi task - Marks HASH
+options cpucount=8 (sas ignores this count?) logical processors;
+run;
+
+All done using a 2011 Dell E6420 I7
+
 Count distinct ids by month in a 192 million records parallel tasks;
+In all tests data is grouoped by month but not strickly sorted.
 
-1. SAS single HASH          6:43.85
-2  WPS single HASH          6:20.18
-3. SAS multi-task           1:33.25  (even though CPU throttled??)
+1. SAS single HASH          6:43.85  (Does not require data to be sorted)
+2  WPS single HASH          6:20.18  (Does not require data to be sorted)
+3. SAS multi-task           1:33.25  (even though CPU throttled? Does not require data to be sorted)
+4. SAS Proc Summary         4:52.10  (does not require data to be sorted(
+       Data _null_
+       https://stackoverflow.com/users/2196220/data-null
+4. WPS Proc Summary         7:02.19  (does not require data to be sorted(
 
-Marks very fast ordered hash
+SORTED INPUT
+
+5. SAS Proc Freq            3.20.52
+       Stu Sztukowski
+       https://stackoverflow.com/users/5342700/stu-sztukowski
+6. WPS Proc Freq           11.56.76
+       Stu Sztukowski
+       https://stackoverflow.com/users/5342700/stu-sztukowski
+
+
+
+Marks very fast ordered hash (input needs to be sorted)
 
 Mark Keintz
 mkeintz@outlook.com
 
-1. Mark SAS HASH          2:49.02
-2. Mark WPS HASH          2:05.06 (no cpu or storage limitations?)
-3. Mark SAS multi task    0:47.06 (ist oartition to 47sec last took 15 sec)
-                                  (should set up SPDE for parallel reads)
-                                  (parallel index might eliminate patitioning)
+1. Mark SAS HASH            2:49.02
+2. Mark WPS HASH            2:05.06 (no cpu or storage limitations?)
+3. Mark SAS multi task      0:47.06 (ist oartition to 47sec last took 15 sec)
+                                    (should set up SPDE for parallel reads)
+                                    (parallel index might eliminate patitioning)
+4. Mark SAS multi task SPDE 0:40.02 (seems like a lot of overhead setup)
+                                    (no need for manual partitioning)
+                                    (however I sorted and indexed the input)
 
 
 I was able to process
@@ -225,8 +262,6 @@ run;
 \__ \ (_| \__ \ | | | | | | |_| | | |_| |_____| || (_| \__ \   <
 |___/\__,_|___/ |_| |_| |_|\__,_|_|\__|_|      \__\__,_|___/_|\_\
 */
-%utlnopts; /*--- turn off macro messaging ----*/
-%array(_mth,values=JAN FEB MAR APR MAY JUN JUL AUG);
 
 /*---- partition ----*/
 data
@@ -351,7 +386,6 @@ run;quit;
 | |\/| |/ _` | `__| |/ / / __|/ _` / __| | `_ \ / _` / __| `_ \
 | |  | | (_| | |  |   <  \__ \ (_| \__ \ | | | | (_| \__ \ | | |
 |_|  |_|\__,_|_|  |_|\_\ |___/\__,_|___/ |_| |_|\__,_|___/_| |_|
-
 */
 
 data want_mark (keep=lagdate uniques  rename=(lagdate=date));
@@ -392,38 +426,26 @@ run;
 %let _pth=%sysfunc(pathname(work));
 
 %utl_submit_wps64("
-
 libname sd1 'd:/sd1';
 libname wrk '&_pth';
-
 data wrk.want_wps_mark (keep=lagdate uniques  rename=(lagdate=date));
-
   if 0 then set sd1.have ;
-
   declare hash hu (dataset:'sd1.have',ordered:'a');
-
     hu.definekey('date','id');
     hu.definedone();
-
   declare hiter i ('hu');
-
   do rc=i.first() by 0 until (i.next()^=0);
-
     lagdate=lag(date);
     if date^=lagdate then do;
-
       if uniques>0 then output;
       uniques=0;
     end;
     uniques+1;
-
   end;
   output;
-
 run;
 proc print;
 run;quit;
-
 ");
 
 /*                    _                      _ _   _       _               _
@@ -553,9 +575,233 @@ run;quit;
 /*                                                                                                                        */
 /**************************************************************************************************************************/
 
+/*                                       __
+ ___  __ _ ___   _ __  _ __ ___   ___   / _|_ __ ___  __ _
+/ __|/ _` / __| | `_ \| `__/ _ \ / __| | |_| `__/ _ \/ _` |
+\__ \ (_| \__ \ | |_) | | | (_) | (__  |  _| | |  __/ (_| |
+|___/\__,_|___/ | .__/|_|  \___/ \___| |_| |_|  \___|\__, |
+                |_|                                     |_|
+*/
+
+ods select none;
+
+proc freq data=sd1.have nlevels;
+   by date notsorted;
+   tables id;
+   ods output nlevels=unique_count (keep   = date nlevels
+                                   rename = (nlevels = uniqid)
+                                  );
+run;
+
+/*                                            __
+__      ___ __  ___   _ __  _ __ ___   ___   / _|_ __ ___  __ _
+\ \ /\ / / `_ \/ __| | `_ \| `__/ _ \ / __| | |_| `__/ _ \/ _` |
+ \ V  V /| |_) \__ \ | |_) | | | (_) | (__  |  _| | |  __/ (_| |
+  \_/\_/ | .__/|___/ | .__/|_|  \___/ \___| |_| |_|  \___|\__, |
+         |_|         |_|                                     |_|
+*/
+
+%let _pth=%sysfunc(pathname(work));
+
+%utl_submit_wps64("
+
+libname sd1 'd:/sd1';
+libname wrk '&_pth';
+
+ods select none;
+
+proc freq data=sd1.havSrt nlevels;
+   by date notsorted;
+   tables id;
+   ods output nlevels=wrk.unique_wps_count( keep   = date nlevels
+                                   rename = (nlevels = uniqid)
+                                  );
+run;quit;
+
+proc print data=unique_wps_count;
+run;quit;
+
+");
+
+/*
+ ___  __ _ ___   _ __  _ __ ___   ___   ___ _   _ _ __ ___  _ __ ___   __ _ _ __ _   _
+/ __|/ _` / __| | `_ \| `__/ _ \ / __| / __| | | | `_ ` _ \| `_ ` _ \ / _` | `__| | | |
+\__ \ (_| \__ \ | |_) | | | (_) | (__  \__ \ |_| | | | | | | | | | | | (_| | |  | |_| |
+|___/\__,_|___/ | .__/|_|  \___/ \___| |___/\__,_|_| |_| |_|_| |_| |_|\__,_|_|   \__, |
+                |_|                                                              |___/
+
+*/
+
+proc summary data=sd1.have nway;
+    class date id;
+    output out=out1(drop=_type_ rename=(_freq_=obs));
+    run;
+
+proc summary data=out1 nway;
+    class date;
+    output out=wrk.out2 (drop=_type_) sum(obs)=;
+    run;
+");
+proc print data=out2;
+    run;
+
+/*
+__      ___ __  ___   _ __  _ __ ___   ___   ___ _   _ _ __ ___  _ __ ___   __ _ _ __ _   _
+\ \ /\ / / `_ \/ __| | `_ \| `__/ _ \ / __| / __| | | | `_ ` _ \| `_ ` _ \ / _` | `__| | | |
+ \ V  V /| |_) \__ \ | |_) | | | (_) | (__  \__ \ |_| | | | | | | | | | | | (_| | |  | |_| |
+  \_/\_/ | .__/|___/ | .__/|_|  \___/ \___| |___/\__,_|_| |_| |_|_| |_| |_|\__,_|_|   \__, |
+         |_|         |_|                                                              |___/
+*/
+
+
+%let _pth=%sysfunc(pathname(work));
+
+%utl_submit_wps64("
+
+libname sd1 'd:/sd1';
+libname wrk '&_pth';
+
+proc summary data=sd1.have nway;
+    class date id;
+    output out=out1(drop=_type_ rename=(_freq_=obs));
+    run;
+
+proc summary data=out1 nway;
+    class date;
+    output out=wrk.out2 (drop=_type_) sum(obs)=;
+    run;
+");
+proc print data=out2;
+    run;
+
+/*                             _                         _ _   _       _            _
+ ___  __ _ ___   ___ _ __   __| | ___    _ __ ___  _   _| | |_(_)     | |_ __ _ ___| | __
+/ __|/ _` / __| / __| `_ \ / _` |/ _ \  | `_ ` _ \| | | | | __| |_____| __/ _` / __| |/ /
+\__ \ (_| \__ \ \__ \ |_) | (_| |  __/  | | | | | | |_| | | |_| |_____| || (_| \__ \   <
+|___/\__,_|___/ |___/ .__/ \__,_|\___|  |_| |_| |_|\__,_|_|\__|_|      \__\__,_|___/_|\_\
+                    |_|
+
+*/
+proc datasets lib=work kill;
+run;quit;
+
+proc datasets lib=spde kill;
+run;quit;
+
+data spde.havSrt(index=(date));
+  set sd1.havSrt;
+  by date;
+run;quit;
+
+
+libname spde spde
+ ('c:\wrk\spde_c','d:\wrk\spde_d')
+    metapath =('c:\wrk\spde_c\metadata')
+    indexpath=(
+          'c:\wrk\spde_c'
+          ,'d:\wrk\spde_d' )
+
+    datapath =(
+          'c:\wrk\spde_c'
+          ,'d:\wrk\spde_d' )
+    partsize=200m
+;
+
+* SAVE the program in autocall library  c:/oto;
+
+filename ft15f001 "c:/oto/_month.sas";
+parmcards4;
+%macro _month(_month);
+
+options cpucount=1;
+
+libname sd1 "d:/sd1";
+
+libname spde spde
+ ('c:\wrk\spde_c','d:\wrk\spde_d')
+    metapath =('c:\wrk\spde_c\metadata')
+    indexpath=(
+          'c:\wrk\spde_c'
+          ,'d:\wrk\spde_d' )
+
+    datapath =(
+          'c:\wrk\spde_c'
+          ,'d:\wrk\spde_d' )
+    access=readonly;
+;
+ data sd1.spde_&_month (keep=lagdate uniques  rename=(lagdate=date));
+
+  if 0 then set spde.havSrt(where=(date="&_month")) ;
+
+  declare hash hu (dataset:"spde.havSrt(where=(date='&_month'))",ordered:"a");
+
+    hu.definekey("date","id");
+    hu.definedone();
+
+  declare hiter i ("hu");
+
+  do rc=i.first() by 0 until (i.next()^=0);
+
+    lagdate=lag(date);
+    if date^=lagdate then do;
+
+      if uniques>0 then output;
+      uniques=0;
+    end;
+    uniques+1;
+
+  end;
+  output;
+
+run;
+libname spde clear;
+%mend _month;
+;;;;
+run;quit;
+
+
+* test the macro interactively;
+* note you can highlight and hit RMB(submit) to compile macro in your interactive session
+  then highlight and RMB the code below to test;
+
+%_month(JAN);
+
+%let _s=%sysfunc(compbl(C:\Progra~1\SASHome\SASFoundation\9.4\sas.exe -sysin
+c:\nul -sasautos c:\oto -autoexec c:\oto\Tut_Oto.sas
+-work d:\wrk)) -nosplash;
+
+options noxwait noxsync;
+%let tym=%sysfunc(time());
+systask kill sys1 sys2 sys3 sys4  sys5 sys6 sys7 sys8;
+systask command "&_s -termstmt %nrstr(%_month(JAN);) -log d:\log\a1.log" taskname=sys1;
+systask command "&_s -termstmt %nrstr(%_month(FEB);) -log d:\log\a2.log" taskname=sys2;
+systask command "&_s -termstmt %nrstr(%_month(MAR);) -log d:\log\a3.log" taskname=sys3;
+systask command "&_s -termstmt %nrstr(%_month(APR);) -log d:\log\a4.log" taskname=sys4;
+systask command "&_s -termstmt %nrstr(%_month(MAY);) -log d:\log\a4.log" taskname=sys5;
+systask command "&_s -termstmt %nrstr(%_month(JUN);) -log d:\log\a6.log" taskname=sys6;
+systask command "&_s -termstmt %nrstr(%_month(JUL);) -log d:\log\a7.log" taskname=sys7;
+systask command "&_s -termstmt %nrstr(%_month(AUG);) -log d:\log\a8.log" taskname=sys8;
+waitfor sys1 sys2 sys3 sys4  sys5 sys6 sys7 sys8;
+%put %sysevalf( %sysfunc(time()) - &tym);
+
+data spde_humptyback;
+  set
+     sd1.spde_JAN
+     sd1.spde_FEB
+     sd1.spde_MAR
+     sd1.spde_APR
+     sd1.spde_MAY
+     sd1.spde_JUN
+     sd1.spde_JUL
+     sd1.spde_AUG
+   ;
+run;quit;
+
+
 /*              _
   ___ _ __   __| |
  / _ \ `_ \ / _` |
 |  __/ | | | (_| |
  \___|_| |_|\__,_|
 */
+
